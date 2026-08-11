@@ -20,6 +20,7 @@ from suite.drive.utils import (
     FRAMEWORK_FOLDERS,
     GENERAL_USER,
     GROUP_PREFIX,
+    PERMISSION_TYPES,
     ROOT_FOLDER,
     STATUS_ACTIVE,
     STATUS_REMOVED,
@@ -286,6 +287,30 @@ class File(FrappeFile):
             }
         ).insert(ignore_permissions=True)
 
+    def _general_access(self, entity_name):
+        """The level a passer-by (anyone with the link) or any other site user
+        would get from `entity_name` alone - its own rows plus whatever it
+        inherits - ignoring anything more specific like an individual share."""
+        public = get_user_access_for_user(entity_name, "Guest")
+        general = generate_upward_path(entity_name, GENERAL_USER)[-1]
+        return {t: bool(public.get(t) or general.get(t)) for t in PERMISSION_TYPES}
+
+    def _exposes_more_broadly(self, new_parent):
+        """Whether moving into `new_parent` would open this file to a broader
+        audience (anyone with the link, or every site user) than it already has
+        where it sits now.
+
+        `share()` requires `share` rights before handing any single grantee
+        access this file's owner doesn't already extend. Moving into a
+        publicly- or site-wide-shared folder is the same act - it hands that
+        same audience access - so it needs the same rights; without this,
+        `move()` is a side door around the check `share()` enforces on the
+        front door.
+        """
+        current = self._general_access(self.name)
+        destination = self._general_access(new_parent)
+        return any(destination[t] and not current[t] for t in PERMISSION_TYPES)
+
     @_update_modified
     def move(self, new_parent=None):
         """
@@ -306,6 +331,16 @@ class File(FrappeFile):
             )
         elif not user_has_permission(new_parent, "upload") or not user_has_permission(self, "write"):
             frappe.throw("You don't have permission to move this file.", frappe.PermissionError)
+        elif (
+            new_parent != self.folder
+            and self._exposes_more_broadly(new_parent)
+            and not user_has_permission(self, "share")
+        ):
+            frappe.throw(
+                "Moving this file here would expose it to people who can't already see it. "
+                "You need share access to do that.",
+                frappe.PermissionError,
+            )
 
         if not frappe.db.get_value("File", new_parent, "is_folder"):
             frappe.throw(
