@@ -287,13 +287,32 @@ class File(FrappeFile):
             }
         ).insert(ignore_permissions=True)
 
+    # The broad audiences a file can be exposed to, kept apart deliberately.
+    # `link` is the `""` principal - anyone holding the URL, including
+    # unauthenticated visitors. `site` is `$GENERAL` - every logged-in user.
+    # These are different populations, so they must be compared separately: a
+    # file every site user can read is still not readable by anonymous
+    # visitors, and collapsing the two into one bit would let a move from one
+    # into the other pass as "no wider".
+    BROAD_AUDIENCES = ("link", "site")
+
     def _general_access(self, entity_name):
-        """The level a passer-by (anyone with the link) or any other site user
-        would get from `entity_name` alone - its own rows plus whatever it
-        inherits - ignoring anything more specific like an individual share."""
-        public = get_user_access_for_user(entity_name, "Guest")
-        general = generate_upward_path(entity_name, GENERAL_USER)[-1]
-        return {t: bool(public.get(t) or general.get(t)) for t in PERMISSION_TYPES}
+        """What each broad audience gets from `entity_name` alone - its own rows
+        plus whatever it inherits - ignoring anything more specific like an
+        individual share.
+
+        `site` is resolved through `$GENERAL`, whose principal ladder also
+        contains `""` (see `get_principals`), so it is really "link or site".
+        That overlap is harmless here because `link` is measured on its own:
+        widening onto the link audience is caught by the `link` comparison even
+        though `site` cannot distinguish it.
+        """
+        link = get_user_access_for_user(entity_name, "Guest")
+        site = generate_upward_path(entity_name, GENERAL_USER)[-1]
+        return {
+            "link": {t: bool(link.get(t)) for t in PERMISSION_TYPES},
+            "site": {t: bool(site.get(t)) for t in PERMISSION_TYPES},
+        }
 
     def _exposes_more_broadly(self, new_parent):
         """Whether moving into `new_parent` would open this file to a broader
@@ -309,7 +328,11 @@ class File(FrappeFile):
         """
         current = self._general_access(self.name)
         destination = self._general_access(new_parent)
-        return any(destination[t] and not current[t] for t in PERMISSION_TYPES)
+        return any(
+            destination[audience][t] and not current[audience][t]
+            for audience in self.BROAD_AUDIENCES
+            for t in PERMISSION_TYPES
+        )
 
     @_update_modified
     def move(self, new_parent=None):

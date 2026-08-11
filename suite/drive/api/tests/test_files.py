@@ -820,6 +820,35 @@ class TestDriveFilesAPI(IntegrationTestCase):
         with self.set_user("Guest"):
             self.assertFalse(user_has_permission(movable, "read"))
 
+    def test_move_cannot_widen_site_wide_file_to_anonymous_visitors(self):
+        """ "Readable by every site user" and "readable by anyone with the link"
+        are different populations - the second reaches people who never logged
+        in. Comparing them as one bit would read this move as "no wider", since
+        both sides already say "broadly readable", and quietly publish a
+        site-internal file to anonymous visitors."""
+        with self.set_user(OWNER):
+            movable = self.upload(b"move me", "movable.txt")
+            movable.share(user=GENERAL_USER, read=True)
+            movable.share(user=OTHER_USER, write=True)
+
+        with self.set_user("Guest"):
+            self.assertFalse(user_has_permission(movable, "read"))
+
+        with self.set_user(OTHER_USER):
+            link_public_folder = create_drive_file(
+                frappe.generate_hash(8),
+                get_user_folder(OTHER_USER).name,
+                "Folder",
+                lambda file: FileManager().create_folder(file),
+            )
+            link_public_folder.share(read=True)
+
+            with self.assertRaises(frappe.PermissionError):
+                move([movable.name], new_parent=link_public_folder.name)
+
+        with self.set_user("Guest"):
+            self.assertFalse(user_has_permission(movable, "read"))
+
     def test_move_allowed_without_share_rights_when_not_widening_audience(self):
         """The check only fires when the destination would expose the file to
         someone new - ordinary reorganizing by a write-only collaborator, into
