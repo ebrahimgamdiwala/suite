@@ -181,9 +181,17 @@ def get_shared_with_list(entity: str):
     if not user_has_permission(entity, "share"):
         raise frappe.PermissionError("You do not have permission to check the shares.")
 
+    owner = frappe.db.get_value("File", entity, "owner")
     permissions = frappe.db.get_all(
         "Drive Permission",
-        filters=[["entity", "=", entity], ["user", "not in", ["", GENERAL_USER]], ["deny", "=", 0]],
+        # The owner is always shown separately below, as `owner_info` — excluded here
+        # too, or a home folder (which carries its own owner's grant from
+        # `grant_owner_access`, same as a transferred file) would list them twice.
+        filters=[
+            ["entity", "=", entity],
+            ["user", "not in", ["", GENERAL_USER, owner]],
+            ["deny", "=", 0],
+        ],
         order_by="user",
         fields=["user", "read", "write", "comment", "upload", "share"],
     )
@@ -192,7 +200,6 @@ def get_shared_with_list(entity: str):
             p.is_group = 1
             p.full_name = p.user[len(GROUP_PREFIX) :]
 
-    owner = frappe.db.get_value("File", entity, "owner")
     owner_info = frappe.db.get_value("User", owner, ["user_image", "full_name", "name as user"], as_dict=True)
     if owner_info:
         # the owner's User row can be gone; the file outlives them

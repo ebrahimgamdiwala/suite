@@ -53,6 +53,17 @@
               <span v-if="user.name === currentUserId" class="ml-auto text-base text-ink-gray-6">
                 (you)
               </span>
+              <!-- Offboarding: hand everything this user owns to somebody else.
+                   Admin-only, and never offered for yourself. -->
+              <Tooltip
+                v-else-if="isAdmin.data?.is_admin"
+                :text="__('Transfer all files to another user')"
+                class="ml-auto"
+              >
+                <Button variant="ghost" @click="openHandover(user)">
+                  <LucideArrowRightLeft class="size-4 text-ink-gray-6" />
+                </Button>
+              </Tooltip>
             </div>
           </div>
         </template>
@@ -149,11 +160,53 @@
         "
       />
     </Dialog>
+
+    <!-- Bulk handover. Runs as a background job: a departing employee's Drive can be
+         thousands of files, and on S3 every one of them is a real object copy. -->
+    <Dialog v-model:open="showHandover" :title="__('Transfer files')">
+      <template #default>
+        <p class="text-p-base text-ink-gray-7">
+          Move everything
+          <b>{{ handoverFrom?.full_name || handoverFrom?.email }}</b> owns into a
+          folder in another user's Drive.
+        </p>
+        <Autocomplete
+          v-model="handoverTo"
+          class="mt-4"
+          :options="handoverCandidates"
+          :placeholder="__('Transfer to')"
+        />
+        <p v-if="handoverStatus" class="mt-4 text-p-sm text-ink-gray-6">
+          {{ handoverStatus }}
+        </p>
+        <p v-else class="mt-4 text-p-sm text-ink-gray-6">
+          They keep view-only access to what they hand over — enough to open it, not to change it.
+          Their storage is freed and charged to the recipient instead.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <Button variant="outline" :label="__('Close')" @click="showHandover = false" />
+          <Button
+            v-if="canRetry"
+            variant="outline"
+            :label="__('Retry')"
+            :loading="retryTransfer.loading"
+            @click="retryHandover"
+          />
+          <Button
+            variant="solid"
+            :label="__('Transfer')"
+            :disabled="!handoverTo"
+            :loading="transferAllOwned.loading"
+            @click="startHandover"
+          />
+        </div>
+      </template>
+    </Dialog>
   </AppSettingsBody>
 </template>
 
 <script setup>
-import { h, computed, ref } from 'vue'
+import { h, computed, ref, onBeforeUnmount } from 'vue'
 import { useSessionStore } from '@/boot/session'
 import {
   getInvites,
@@ -163,6 +216,7 @@ import {
   siteUsers,
 } from '@/apps/drive/resources/permissions'
 import {
+  Autocomplete,
   Avatar,
   Dialog,
   Badge,
@@ -178,6 +232,7 @@ import LucideMail from '~icons/lucide/mail'
 import LucideUsers from '~icons/lucide/users'
 import LucideCheck from '~icons/lucide/check'
 import LucideTrash from '~icons/lucide/trash'
+import LucideArrowRightLeft from '~icons/lucide/arrow-right-left'
 import LucideX from '~icons/lucide/x'
 import Alert from '@/apps/drive/components/Alert.vue'
 import UserTooltip from '@/apps/drive/components/UserTooltip.vue'
@@ -199,6 +254,98 @@ isAdmin.fetch(null, {
 const invited = ref([])
 const emailInput = ref('')
 const showInvite = ref(false)
+
+// -- bulk ownership handover -------------------------------------------------
+const showHandover = ref(false)
+const handoverFrom = ref(null)
+const handoverTo = ref(null)
+const handoverStatus = ref('')
+let pollTimer = null
+
+const handoverCandidates = computed(() =>
+  (siteUsers.data || [])
+    .filter((u) => u.name !== handoverFrom.value?.name)
+    .map((u) => ({ label: u.full_name || u.email, value: u.name })),
+)
+
+const transferAllOwned = createResource({
+  url: 'suite.drive.api.ownership.transfer_all_owned',
+  onError: (error) =>
+    toast.error(error.messages?.at(-1) || 'Could not start the transfer.'),
+})
+
+const transferStatus = createResource({
+  url: 'suite.drive.api.ownership.get_transfer_status',
+})
+
+// A handover that died mid-flight leaves its remaining items pending; re-running
+// picks them up. Also the only way to release a row stuck on Running after a
+// worker was killed, which otherwise blocks that user's next handover.
+const retryTransfer = createResource({
+  url: 'suite.drive.api.ownership.retry_transfer',
+  onError: (error) =>
+    toast.error(error.messages?.at(-1) || 'Could not retry the transfer.'),
+})
+
+const lastTransfer = ref(null)
+const canRetry = computed(() =>
+  ['Failed', 'Completed With Errors'].includes(transferStatus.data?.status),
+)
+
+function retryHandover() {
+  retryTransfer.submit(
+    { transfer: lastTransfer.value },
+    { onSuccess: () => poll(lastTransfer.value) },
+  )
+}
+
+function openHandover(user) {
+  handoverFrom.value = user
+  handoverTo.value = null
+  handoverStatus.value = ''
+  lastTransfer.value = null
+  showHandover.value = true
+}
+
+function startHandover() {
+  transferAllOwned.submit(
+    { from_user: handoverFrom.value.name, to_user: handoverTo.value.value },
+    {
+      onSuccess: (name) => {
+        lastTransfer.value = name
+        handoverStatus.value = 'Queued…'
+        poll(name)
+      },
+    },
+  )
+}
+
+// The work happens in a background job, so the dialog reports progress rather
+// than pretending the transfer finished when the request returned.
+function poll(name) {
+  clearTimeout(pollTimer)
+  transferStatus.fetch(
+    { transfer: name },
+    {
+      onSuccess: (d) => {
+        if (!d) return
+        handoverStatus.value =
+          d.status === 'Queued'
+            ? 'Queued…'
+            : `${d.status} — ${d.files_moved || 0}/${d.total_files || 0} moved` +
+              (d.files_failed ? `, ${d.files_failed} failed` : '') +
+              (d.files_repaired ? `, ${d.files_repaired} relinked` : '')
+        if (d.status === 'Queued' || d.status === 'Running') {
+          pollTimer = setTimeout(() => poll(name), 2000)
+        } else {
+          siteUsers.fetch()
+        }
+      },
+    },
+  )
+}
+
+onBeforeUnmount(() => clearTimeout(pollTimer))
 
 // iconLeft, not icon: `icon` makes an icon-only trigger and drops the label.
 const tabs = computed(() => [

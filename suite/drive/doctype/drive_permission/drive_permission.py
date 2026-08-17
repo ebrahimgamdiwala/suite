@@ -14,6 +14,12 @@ class DrivePermission(Document):
         # historical grants would mail everyone about folders they already had.
         if frappe.flags.in_install or frappe.flags.in_migrate or frappe.flags.in_patch:
             return
+        # An ownership transfer plants rows for both parties itself and sends its own
+        # `Transfer` notification. Without this the previous owner is emailed "someone
+        # shared a file with you" about a file they just gave away — and during an
+        # offboarding they may already be gone.
+        if frappe.flags.get("in_ownership_transfer"):
+            return
         # Only individual users get notified — "" (anyone with the link),
         # $GENERAL (site users) and $GROUP: rows are not email addresses.
         if self.user and self.user != GENERAL_USER and not self.user.startswith(GROUP_PREFIX):

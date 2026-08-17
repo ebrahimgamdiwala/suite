@@ -374,6 +374,9 @@ ignore_links_on_delete = [
     "Drive Entity Activity Log",
     "Drive DAV Property",
     "Drive DAV Lock",
+    # a completed handover is an audit record; it must not keep either party's User
+    # row undeletable, and it has to survive the source user being removed
+    "Drive Ownership Transfer",
     # mail
     "Mail Account Request",
     "JMAP Account",

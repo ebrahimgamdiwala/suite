@@ -58,3 +58,19 @@ export const rename = createResource({
     toast.error(error.messages?.at(-1) || 'Could not rename this file.')
   },
 })
+
+export const transferOwnership = createResource({
+  url: 'suite.drive.api.ownership.transfer_ownership',
+  method: 'POST',
+  makeParams: (data) => ({ ...data }),
+  onError(error) {
+    // Quota and permission refusals arrive as messages; without this they are
+    // swallowed and the dialog just appears to do nothing.
+    toast.error(error.messages?.at(-1) || 'Could not transfer ownership.')
+  },
+})
+
+export const transferPreview = createResource({
+  url: 'suite.drive.api.ownership.get_transfer_preview',
+  makeParams: (params) => params,
+})

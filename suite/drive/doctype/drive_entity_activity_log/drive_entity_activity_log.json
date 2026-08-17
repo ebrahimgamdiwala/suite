@@ -28,7 +28,7 @@
       "fieldname": "action_type",
       "fieldtype": "Select",
       "label": "Action Type",
-      "options": "create\ncomment\nshare_add\nshare_remove\nshare_edit\nrename\nedit\nmove\ndelete"
+      "options": "create\ncomment\nshare_add\nshare_remove\nshare_edit\nrename\nedit\nmove\ndelete\ntransfer"
     },
     {
       "fieldname": "old_value",

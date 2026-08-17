@@ -67,7 +67,7 @@
                 <template v-else>You</template>
               </span>
               <AccessSelect v-else-if="user.user !== file.owner" variant="ghost" :modelValue="user.write ? 'editor' : user.upload ? 'upload' : 'reader'
-                " :options="[...accessOptions, REMOVE_OPTION]" @update:model-value="
+                " :options="memberOptions(user)" @update:model-value="
                   (val) => updatePermissions(user, val, file.name, idx)
                 " />
               <span v-else class="flex items-center gap-1 text-ink-gray-5">
@@ -97,6 +97,36 @@
       </div>
     </template>
   </Dialog>
+
+  <!-- Ownership transfer confirmation. Irreversible from the giver's side, and it
+       moves the file out of their Drive, so it never happens on a single click. -->
+  <Dialog v-model:open="showTransfer" title="Transfer ownership">
+    <template #default>
+      <p class="text-p-base text-ink-gray-7">
+        <b>{{ transferName }}</b> will become the owner of "{{ file.file_name }}".
+      </p>
+      <ul class="mt-3 list-disc pl-5 text-p-sm text-ink-gray-6 space-y-1">
+        <li v-if="transferPreview.data?.leaves_your_drive">
+          It moves out of your Drive and into theirs.
+        </li>
+        <li v-if="transferPreview.data?.files > 1">
+          {{ transferPreview.data.files }} files
+          <template v-if="transferPreview.data.folders">
+            in {{ transferPreview.data.folders }} folders
+          </template>
+          change hands, and the storage counts against them.
+        </li>
+        <li>
+          You keep view-only access (you can still open it, but not change it or take it back)
+        </li>
+      </ul>
+      <div class="mt-5 flex justify-end gap-2">
+        <Button variant="outline" label="Cancel" @click="showTransfer = false" />
+        <Button variant="solid" theme="red" label="Transfer" :loading="transferOwnership.loading"
+          @click="confirmTransfer" />
+      </div>
+    </template>
+  </Dialog>
 </template>
 <script setup>
 import { ref, computed, watch, h } from 'vue'
@@ -116,7 +146,13 @@ import { getUserGroups } from '@/apps/drive/resources/permissions'
 import LucideUsers from '~icons/lucide/users'
 import { getFileLink, dynamicList } from '../js/utils'
 
-import { usersWithAccess, updateAccess, allUsers } from '../js/resources'
+import {
+  usersWithAccess,
+  updateAccess,
+  allUsers,
+  transferOwnership,
+  transferPreview,
+} from '../js/resources'
 
 
 const currentUserId = computed(() => useSessionStore().user)
@@ -158,6 +194,19 @@ const REMOVE_OPTION = {
   label: 'Remove',
   icon: 'lucide-trash-2',
 }
+const TRANSFER_OPTION = {
+  value: 'transfer',
+  label: 'Make owner',
+  icon: 'lucide-crown',
+}
+
+// Only the owner can hand a file on — `share` is deliberately not enough, or a
+// collaborator could give away someone else's file. Groups cannot own anything.
+const canTransfer = computed(() => props.file.owner === currentUserId.value)
+const memberOptions = (user) =>
+  user.is_group || !canTransfer.value
+    ? [...accessOptions.value, REMOVE_OPTION]
+    : [...accessOptions.value, TRANSFER_OPTION, REMOVE_OPTION]
 
 const accessOptions = computed(() =>
   dynamicList([
@@ -277,7 +326,50 @@ const inviteUsers = () => {
   emit('success')
 }
 
+// Ownership transfer
+const transferTarget = ref(null)
+const showTransfer = ref(false)
+const transferName = computed(
+  () =>
+    transferTarget.value?.full_name ||
+    transferTarget.value?.user ||
+    transferTarget.value?.email,
+)
+
+const confirmTransfer = () => {
+  const recipient = transferTarget.value.user
+  // Read through before the dialogs unmount and the refs are cleared.
+  const recipientName = transferName.value
+  const fileName = props.file.file_name
+  transferOwnership.submit(
+    { entity: props.file.name, new_owner: recipient },
+    {
+      onSuccess() {
+        // Close the whole share dialog, not just the confirmation: the caller no
+        // longer owns this file, so a sharing panel for it is the wrong thing to
+        // leave on screen. The toast is the confirmation. `usersWithAccess` is not
+        // refetched here for the same reason — it reloads on next mount anyway.
+        showTransfer.value = false
+        open.value = false
+        toast.success(`${recipientName} now owns "${fileName}"`)
+        emit('success')
+      },
+      onError() {
+        // Only the confirmation closes: they still own the file, so leave them on
+        // the sharing panel with the error rather than kicking them out.
+        showTransfer.value = false
+      },
+    },
+  )
+}
+
 const updatePermissions = (user, val, entity_name, idx) => {
+  if (val === 'transfer') {
+    transferTarget.value = user
+    showTransfer.value = true
+    transferPreview.fetch({ entity: entity_name })
+    return
+  }
   if (val === 'remove') {
     props.usersWithAccess.data.splice(idx, 1)
     return props.updateAccess.submit({

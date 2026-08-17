@@ -1,0 +1,158 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-08-14 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "from_user",
+  "to_user",
+  "column_break_principals",
+  "status",
+  "keep_previous_access",
+  "section_break_progress",
+  "destination_folder",
+  "total_files",
+  "files_moved",
+  "files_failed",
+  "files_repaired",
+  "section_break_errors",
+  "error_log"
+ ],
+ "fields": [
+  {
+   "description": "Email of the user whose files are being handed over. Data, not Link: a handover is most often run for someone who has already been removed, and the row has to outlive them.",
+   "fieldname": "from_user",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "From User",
+   "not_nullable": 1,
+   "reqd": 1,
+   "set_only_once": 1
+  },
+  {
+   "fieldname": "to_user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "To User",
+   "options": "User",
+   "reqd": 1,
+   "set_only_once": 1
+  },
+  {
+   "fieldname": "column_break_principals",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Queued",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Queued\nRunning\nCompleted\nCompleted With Errors\nFailed",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "description": "Leave the previous owner view-only access to what they handed over. They can still open it, but not change or re-share it.",
+   "fieldname": "keep_previous_access",
+   "fieldtype": "Check",
+   "label": "Keep Previous Access",
+   "set_only_once": 1
+  },
+  {
+   "fieldname": "section_break_progress",
+   "fieldtype": "Section Break",
+   "label": "Progress"
+  },
+  {
+   "description": "Folder created in the recipient's Drive to receive the handover.",
+   "fieldname": "destination_folder",
+   "fieldtype": "Link",
+   "label": "Destination Folder",
+   "options": "File",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Top-level items to hand over, as counted when the run started.",
+   "fieldname": "total_files",
+   "fieldtype": "Int",
+   "label": "Total Files",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "files_moved",
+   "fieldtype": "Int",
+   "label": "Files Moved",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "files_failed",
+   "fieldtype": "Int",
+   "label": "Files Failed",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Rows whose file_url had to be re-pointed at bytes a half-finished relocation had already moved.",
+   "fieldname": "files_repaired",
+   "fieldtype": "Int",
+   "label": "Files Repaired",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_errors",
+   "fieldtype": "Section Break",
+   "label": "Errors"
+  },
+  {
+   "fieldname": "error_log",
+   "fieldtype": "Long Text",
+   "label": "Error Log",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-14 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Drive",
+ "name": "Drive Ownership Transfer",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Suite Admin",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "from_user"
+}
