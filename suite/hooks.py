@@ -279,6 +279,11 @@ setup_wizard_url = "/suite/setup"
 # ============================================================================
 # Scheduled Tasks (per-frequency lists combined; cron keys de-duplicated)
 # ============================================================================
+# Chunked-upload progress lives in the cache; keep it across `bench clear-cache`.
+persistent_cache_keys = [
+    "drive-upload-*",
+]
+
 scheduler_events = {
     "daily": [
         # meet
@@ -286,6 +291,7 @@ scheduler_events = {
         # drive
         "suite.drive.api.scripts.auto_delete_from_trash",
         "suite.drive.api.scripts.clear_deleted_files",
+        "suite.drive.api.scripts.clear_stale_uploads",
         # sheets
         "suite.sheets.versioning.tasks.rollup_snapshots",
         "suite.sheets.versioning.tasks.truncate_op_log",

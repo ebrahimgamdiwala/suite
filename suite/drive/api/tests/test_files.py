@@ -15,6 +15,7 @@ from suite.drive.api.files import (
     does_entity_exist,
     get_file_content,
     get_new_title,
+    get_staging_name,
     move,
     remove_or_restore,
     rename,
@@ -245,7 +246,10 @@ class TestDriveFilesAPI(IntegrationTestCase):
             ):
                 upload_file(total_file_size=8, parent=self.folder.name)
 
-            staged_files = list((storage_root / ".uploads").iterdir())
+            # Quota is now checked before anything touches disk, so a rejection
+            # on the very first chunk never creates `.uploads` at all.
+            uploads_dir = storage_root / ".uploads"
+            staged_files = list(uploads_dir.iterdir()) if uploads_dir.exists() else []
             self.assertEqual(staged_files, [])
 
     def test_chunked_upload_without_session_is_rejected_before_writing(self):
@@ -338,8 +342,38 @@ class TestDriveFilesAPI(IntegrationTestCase):
             uploads_root = storage_root / ".uploads"
             uploads_root.mkdir(parents=True)
             outside_file = Path(temp_dir) / "outside.txt"
-            (uploads_root / "valid-session_upload.txt").symlink_to(outside_file)
 
+            with self.set_user(OWNER):
+                # The staging name is derived from the session user, so the
+                # symlink has to be planted at the name that user will resolve to.
+                (uploads_root / get_staging_name("valid-session")).symlink_to(outside_file)
+
+                with (
+                    patch(
+                        "suite.drive.api.files.frappe.get_site_path",
+                        return_value=str(storage_root),
+                    ),
+                    patch(
+                        "suite.drive.api.files.frappe.get_single",
+                        return_value=frappe._dict(root_folder=""),
+                    ),
+                    self.assertRaises(frappe.ValidationError),
+                ):
+                    self.upload(
+                        b"partial",
+                        session="valid-session",
+                        chunk=(0, 2, 0),
+                        total_size=20,
+                    )
+
+            self.assertFalse(outside_file.exists())
+
+    @contextmanager
+    def staging_dir(self):
+        """Run an upload against a throwaway staging root and hand back its path."""
+        with TemporaryDirectory() as temp_dir:
+            storage_root = Path(temp_dir) / "private" / "files"
+            storage_root.mkdir(parents=True)
             with (
                 self.set_user(OWNER),
                 patch("suite.drive.api.files.frappe.get_site_path", return_value=str(storage_root)),
@@ -347,16 +381,91 @@ class TestDriveFilesAPI(IntegrationTestCase):
                     "suite.drive.api.files.frappe.get_single",
                     return_value=frappe._dict(root_folder=""),
                 ),
-                self.assertRaises(frappe.ValidationError),
             ):
-                self.upload(
-                    b"partial",
-                    session="valid-session",
-                    chunk=(0, 2, 0),
-                    total_size=20,
-                )
+                yield storage_root / ".uploads"
 
-            self.assertFalse(outside_file.exists())
+    def test_resent_chunk_overwrites_instead_of_appending(self):
+        """A re-sent chunk must land back on its own offset, not duplicate.
+        Three chunks are declared so the upload never finalizes and the
+        assertion can read the staged bytes directly."""
+        session = frappe.generate_hash(12)
+        with self.staging_dir() as uploads:
+            staged = uploads / get_staging_name(session)
+            self.upload(b"AAAA", session=session, chunk=(0, 3, 0), total_size=12)
+            self.upload(b"AAAA", session=session, chunk=(0, 3, 0), total_size=12)
+            self.upload(b"BBBB", session=session, chunk=(1, 3, 4), total_size=12)
+
+            # Before this fix: b"AAAAAAAABBBB".
+            self.assertEqual(staged.read_bytes(), b"AAAABBBB")
+
+    def test_chunks_arriving_out_of_order_are_assembled_by_offset(self):
+        """Arrival order must not decide byte order - only the offset may."""
+        session = frappe.generate_hash(12)
+        with self.staging_dir() as uploads:
+            staged = uploads / get_staging_name(session)
+            self.upload(b"BBBB", session=session, chunk=(1, 3, 4), total_size=12)
+            self.upload(b"AAAA", session=session, chunk=(0, 3, 0), total_size=12)
+
+            # Before this fix: b"BBBBAAAA".
+            self.assertEqual(staged.read_bytes(), b"AAAABBBB")
+
+    def test_single_upload_without_a_declared_size_still_completes(self):
+        """`uploadImage` posts one part through frappe-ui's uploader and sends no
+        total_file_size at all, so none of the size checks may assume one."""
+        with self.set_user(OWNER):
+            uploaded = self.upload(b"pasted image bytes", "paste.png", total_size=0)
+
+            self.assertIsNotNone(uploaded)
+            with FileManager().get_file(uploaded) as stored:
+                self.assertEqual(stored.read(), b"pasted image bytes")
+
+    def test_chunk_past_the_declared_size_is_rejected_before_writing(self):
+        session = frappe.generate_hash(12)
+        with self.staging_dir() as uploads:
+            with self.assertRaises(frappe.ValidationError):
+                self.upload(b"AAAA", session=session, chunk=(1, 2, 1024), total_size=8)
+
+            self.assertFalse(uploads.exists())
+
+    def test_single_chunk_upload_cannot_smuggle_an_offset(self):
+        """A one-chunk request still carries a client-supplied chunk_byte_offset,
+        so it needs a declared total to bound it too, not just multi-chunk ones."""
+        session = frappe.generate_hash(12)
+        with self.staging_dir() as uploads:
+            with self.assertRaises(frappe.ValidationError):
+                self.upload(b"AAAA", session=session, chunk=(0, 1, 1 << 40), total_size=0)
+
+            self.assertFalse(uploads.exists())
+
+    def test_a_declared_total_does_not_let_a_sparse_file_finalize(self):
+        """Writing only the last few bytes of an honestly-declared total leaves
+        a file whose st_size matches but whose contents were never sent."""
+        session = frappe.generate_hash(12)
+        total = 1 << 30
+        with self.staging_dir() as uploads:
+            staged = uploads / get_staging_name(session)
+            self.assertIsNone(
+                self.upload(b"AAAA", session=session, chunk=(0, 1, total - 4), total_size=total)
+            )
+
+            # Staged at the declared length, but only 4 bytes were ever sent.
+            self.assertEqual(staged.stat().st_size, total)
+
+    def test_chunk_index_outside_the_declared_total_is_rejected(self):
+        session = frappe.generate_hash(12)
+        with self.staging_dir() as uploads:
+            with self.assertRaises(frappe.ValidationError):
+                self.upload(b"AAAA", session=session, chunk=(5, 2, 0), total_size=8)
+
+            self.assertFalse(uploads.exists())
+
+    def test_chunked_upload_must_declare_a_total_size(self):
+        session = frappe.generate_hash(12)
+        with self.staging_dir() as uploads:
+            with self.assertRaises(frappe.ValidationError):
+                self.upload(b"AAAA", session=session, chunk=(0, 2, 0), total_size=0)
+
+            self.assertFalse(uploads.exists())
 
     def test_owner_can_read_and_unrelated_user_cannot(self):
         with self.set_user(OWNER):
