@@ -3,6 +3,7 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
+from uuid import uuid4
 
 import frappe
 from frappe.tests import IntegrationTestCase
@@ -419,6 +420,26 @@ class TestDriveFilesAPI(IntegrationTestCase):
             with FileManager().get_file(uploaded) as stored:
                 self.assertEqual(stored.read(), b"pasted image bytes")
 
+    def test_retrying_after_a_lost_success_response_does_not_duplicate_the_file(self):
+        """The client can resend the same session after a successful finalize
+        it never saw the response for (e.g. the reply dropped on the way
+        back). That must be a no-op, not a second File."""
+        session = frappe.generate_hash(12)
+        with self.set_user(OWNER):
+            first = self.upload(b"AAAA", "retry-after-success.txt", session=session, total_size=4)
+            self.assertIsNotNone(first)
+
+            second = self.upload(b"AAAA", "retry-after-success.txt", session=session, total_size=4)
+            self.assertIsNone(second)
+
+            self.assertEqual(
+                frappe.db.count(
+                    "File",
+                    {"file_name": ["like", "retry-after-success%"], "folder": self.folder.name},
+                ),
+                1,
+            )
+
     def test_chunk_past_the_declared_size_is_rejected_before_writing(self):
         session = frappe.generate_hash(12)
         with self.staging_dir() as uploads:
@@ -671,7 +692,11 @@ class TestDriveFilesAPI(IntegrationTestCase):
                 file.save()
 
     def test_ordered_chunks_are_assembled_byte_for_byte(self):
-        session = "123e4567-e89b-42d3-a456-426614174000"
+        # A real (hyphenated) UUID, like a real client sends - and unique per
+        # run, or a completed session's claim (now deliberately kept past a
+        # successful finalize, see the retry-after-success test) would make a
+        # second run of this same test a no-op against a stale one.
+        session = str(uuid4())
         with self.set_user(OWNER):
             self.assertIsNone(self.upload(b"hello ", session=session, chunk=(0, 2, 0), total_size=11))
             uploaded = self.upload(b"world", session=session, chunk=(1, 2, 6), total_size=11)

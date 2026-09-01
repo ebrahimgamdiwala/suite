@@ -1,11 +1,25 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { expect, test } from "../../fixtures/test";
 
 // Matches FileUploader.vue's Dropzone chunkSize (20MB). A file just over one
 // chunk produces exactly 2 chunks, so the second needs a real offset to land
 // at rather than offset 0.
 const CHUNK_SIZE = 20 * 1024 * 1024;
-const fileBuffer = randomBytes(CHUNK_SIZE + 5 * 1024 * 1024);
+
+// Deterministic, not `randomBytes()`: a failing run must be reproducible from
+// its SHA-256 alone, and content has to actually differ from one chunk to the
+// next so a duplication or reorder bug is guaranteed to change the hash.
+function fillDeterministic(size: number): Buffer {
+  const buf = Buffer.alloc(size);
+  let state = 0x2f6e2b1;
+  for (let i = 0; i < size; i++) {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    buf[i] = state & 0xff;
+  }
+  return buf;
+}
+
+const fileBuffer = fillDeterministic(CHUNK_SIZE + 5 * 1024 * 1024);
 const expectedSha256 = createHash("sha256").update(fileBuffer).digest("hex");
 
 /**

@@ -186,12 +186,15 @@ def upload_file(
             drive_file.save()
     except Exception:
         # Let the same uuid be retried from scratch instead of inheriting a
-        # half-finalized partial.
+        # half-finalized partial. The claim is released only here - on success
+        # it stays in place until its TTL, so a resend of the same session
+        # (e.g. the client never saw the response) can't re-finalize and
+        # insert the file twice.
         staging_path.unlink(missing_ok=True)
+        cache.delete_value(claim, make_keys=False)
         raise
     finally:
         cache.delete_value(chunks_key)
-        cache.delete_value(claim, make_keys=False)
 
     try:
         update_file_size(parent, file_size)
