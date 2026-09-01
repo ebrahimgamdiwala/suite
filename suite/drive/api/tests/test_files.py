@@ -440,6 +440,17 @@ class TestDriveFilesAPI(IntegrationTestCase):
                 1,
             )
 
+    def test_completion_claim_never_expires(self):
+        """A TTL'd claim would let a resend past the window re-finalize and
+        duplicate the file - the claim guarding a completed session must
+        outlive any retry, not just the working-upload TTL."""
+        session = frappe.generate_hash(12)
+        with self.set_user(OWNER):
+            self.assertIsNotNone(self.upload(b"AAAA", "no-expiry.txt", session=session, total_size=4))
+            claim_key = frappe.cache().make_key(f"drive-upload-done:{get_staging_name(session)}")
+
+        self.assertEqual(frappe.cache().ttl(claim_key), -1)
+
     def test_chunk_past_the_declared_size_is_rejected_before_writing(self):
         session = frappe.generate_hash(12)
         with self.staging_dir() as uploads:

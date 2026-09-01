@@ -154,9 +154,12 @@ def upload_file(
         return
 
     # With a complete ledger, two concurrent requests can both reach this line;
-    # the winner of this claim is the one that finalizes.
+    # the winner of this claim is the one that finalizes. No TTL: a completed
+    # session must never be re-finalizable, at any distance in time, not just
+    # within a window - an expiring claim would let a sufficiently late resend
+    # (or a deliberate replay) insert the file a second time.
     claim = cache.make_key(f"drive-upload-done:{staging_name}")
-    if not cache.set(claim, frappe.session.user, ex=UPLOAD_SESSION_TTL, nx=True):
+    if not cache.set(claim, frappe.session.user, nx=True):
         return
 
     try:
@@ -189,10 +192,10 @@ def upload_file(
             drive_file.save()
     except Exception:
         # Let the same uuid be retried from scratch instead of inheriting a
-        # half-finalized partial. The claim is released only here - on success
-        # it stays in place until its TTL, so a resend of the same session
-        # (e.g. the client never saw the response) can't re-finalize and
-        # insert the file twice.
+        # half-finalized partial. The claim is released only here - on
+        # success it is never released, so a resend of the same session
+        # (e.g. the client never saw the response, or a later replay) can't
+        # re-finalize and insert the file twice.
         staging_path.unlink(missing_ok=True)
         cache.delete_value(claim, make_keys=False)
         raise
