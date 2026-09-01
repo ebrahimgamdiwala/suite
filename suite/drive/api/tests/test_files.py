@@ -684,6 +684,16 @@ class TestDriveFilesAPI(IntegrationTestCase):
             with FileManager().get_file(uploaded) as stored:
                 self.assertEqual(stored.read(), b"unknown file contents")
 
+    def test_mime_type_is_read_from_the_uploaded_name_not_the_staging_path(self):
+        """mimemapper resolves type from a filename string alone, not file
+        content - it has to see the name the user uploaded, not the
+        content-addressed `.part` staging path, which carries no extension."""
+        with self.set_user(OWNER):
+            uploaded = self.upload(b"plain text content", "notes.txt")
+
+            self.assertEqual(uploaded.file_type, "Text")
+            self.assertEqual(uploaded.mime_type, "text/plain")
+
     def test_file_url_update_requires_valid_storage_path(self):
         with self.set_user(OWNER):
             file = frappe.get_doc("File", self.file.name)

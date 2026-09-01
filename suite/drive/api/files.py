@@ -164,7 +164,10 @@ def upload_file(
         acquire_owner_storage_lock(frappe.session.user)
         validate_quota(incoming_size=file_size)
 
-        mime_type = mimemapper.get_mime_type(str(staging_path), native_first=False)
+        # mimemapper reads the extension off this string, not the file's actual
+        # bytes - it must be the uploaded name, not the staging path, which is
+        # a content-addressed `.part` file with no extension of its own.
+        mime_type = mimemapper.get_mime_type(file_name, native_first=False)
         file_type = get_file_type(mime_type)
         manager = FileManager()
 
